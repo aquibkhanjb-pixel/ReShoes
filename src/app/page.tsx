@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { useEffect, useState } from "react";
 import { formatPrice } from "@/lib/utils";
+import { useAuthStore } from "@/store/authStore";
+import { useCartStore } from "@/store/cartStore";
+import { UserMenu } from "@/components/UserMenu";
 
 interface Shoe {
   _id: string;
@@ -17,12 +20,38 @@ interface Shoe {
 }
 
 export default function HomePage() {
+  const { isAuthenticated, token } = useAuthStore();
+  const { itemCount, setItems } = useCartStore();
   const [shoes, setShoes] = useState<Shoe[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchShoes();
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchCart();
+    }
+  }, [isAuthenticated]);
+
+  const fetchCart = async () => {
+    try {
+      const response = await fetch("/api/cart", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setItems(data.cart.items || []);
+      }
+    } catch (error) {
+      console.error("Error fetching cart:", error);
+    }
+  };
 
   const fetchShoes = async () => {
     try {
@@ -50,12 +79,23 @@ export default function HomePage() {
             <Link href="/browse">
               <Button variant="ghost">Browse</Button>
             </Link>
-            <Link href="/login">
-              <Button variant="outline">Login</Button>
-            </Link>
-            <Link href="/register">
-              <Button>Sign Up</Button>
-            </Link>
+            {isAuthenticated && (
+              <Link href="/cart">
+                <Button variant="ghost">Cart ({itemCount})</Button>
+              </Link>
+            )}
+            {isAuthenticated ? (
+              <UserMenu />
+            ) : (
+              <>
+                <Link href="/login">
+                  <Button variant="outline">Login</Button>
+                </Link>
+                <Link href="/register">
+                  <Button>Sign Up</Button>
+                </Link>
+              </>
+            )}
           </nav>
         </div>
       </header>

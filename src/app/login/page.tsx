@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,9 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/store/authStore";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setAuth } = useAuthStore();
+  const returnUrl = searchParams.get("returnUrl");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [formData, setFormData] = useState({
@@ -36,8 +38,10 @@ export default function LoginPage() {
       if (data.success) {
         setAuth(data.user, data.token);
 
-        // Redirect based on role
-        if (data.user.role === "admin") {
+        // Redirect to returnUrl if provided, otherwise based on role
+        if (returnUrl) {
+          router.push(returnUrl);
+        } else if (data.user.role === "admin") {
           router.push("/admin");
         } else if (data.user.role === "seller") {
           router.push("/seller");
@@ -115,5 +119,13 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

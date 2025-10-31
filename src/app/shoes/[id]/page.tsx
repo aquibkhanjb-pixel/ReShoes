@@ -7,6 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatPrice } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
+import { useCartStore } from "@/store/cartStore";
+import { ShippingAddressDialog } from "@/components/ShippingAddressDialog";
+import { UserMenu } from "@/components/UserMenu";
+
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
 
 interface Shoe {
   _id: string;
@@ -30,16 +39,35 @@ interface Shoe {
 export default function ShoeDetailsPage() {
   const params = useParams();
   const router = useRouter();
-  const { user, isAuthenticated } = useAuthStore();
+  const { user, isAuthenticated, token } = useAuthStore();
+  const { isInCart, addItemToStore, setItems, itemCount } = useCartStore();
   const [shoe, setShoe] = useState<Shoe | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(0);
+  const [showShippingDialog, setShowShippingDialog] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [addingToCart, setAddingToCart] = useState(false);
 
   useEffect(() => {
     if (params.id) {
       fetchShoe();
     }
   }, [params.id]);
+
+  // Load cart and Razorpay script
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchCart();
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    document.body.appendChild(script);
+    return () => {
+      document.body.removeChild(script);
+    };
+  }, [isAuthenticated]);
 
   const fetchShoe = async () => {
     try {
@@ -55,13 +83,196 @@ export default function ShoeDetailsPage() {
     }
   };
 
+  const fetchCart = async () => {
+    try {
+      const response = await fetch("/api/cart", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setItems(data.cart.items || []);
+      }
+    } catch (error) {
+      console.error("Error fetching cart:", error);
+    }
+  };
+
   const handleBuyNow = () => {
     if (!isAuthenticated) {
-      router.push("/login");
+      // Redirect to login with return URL
+      const currentUrl = window.location.pathname;
+      router.push(`/login?returnUrl=${encodeURIComponent(currentUrl)}`);
       return;
     }
-    // TODO: Implement Razorpay checkout
-    alert("Razorpay payment integration coming soon! Add your Razorpay keys to .env.local");
+    setShowShippingDialog(true);
+  };
+
+  const handleAddToCart = async () => {
+    if (!isAuthenticated) {
+      // Redirect to login with return URL
+      const currentUrl = window.location.pathname;
+      router.push(`/login?returnUrl=${encodeURIComponent(currentUrl)}`);
+      return;
+    }
+
+    if (!shoe) return;
+
+    // If already in cart, just navigate to cart page
+    if (isInCart(shoe._id)) {
+      router.push("/cart");
+      return;
+    }
+
+    setAddingToCart(true);
+
+    try {
+      const response = await fetch("/api/cart", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ shoeId: shoe._id }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Update local store
+        setItems(data.cart.items || []);
+        alert("Item added to cart successfully!");
+
+        // Ask if user wants to view cart
+        const viewCart = confirm("Item added to cart! Would you like to view your cart?");
+        if (viewCart) {
+          router.push("/cart");
+        }
+      } else {
+        alert(data.error || "Failed to add item to cart");
+      }
+    } catch (error: any) {
+      console.error("Error adding to cart:", error);
+      alert(error.message || "Failed to add item to cart");
+    } finally {
+      setAddingToCart(false);
+    }
+  };
+
+  const handleShippingSubmit = async (shippingAddress: any) => {
+    if (!shoe) return;
+
+    setPaymentLoading(true);
+
+    try {
+      // Step 1: Create Razorpay order
+      const orderResponse = await fetch("/api/razorpay/create-order", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ shoeId: shoe._id }),
+      });
+
+      const orderData = await orderResponse.json();
+
+      if (!orderResponse.ok) {
+        throw new Error(orderData.error || "Failed to create order");
+      }
+
+      // Step 2: Open Razorpay checkout
+      const options = {
+        key: orderData.keyId,
+        amount: orderData.amount * 100, // Amount in paise
+        currency: orderData.currency,
+        name: "ReShoe",
+        description: shoe.title,
+        order_id: orderData.orderId,
+        handler: async function (response: any) {
+          try {
+            // Step 3: Verify payment
+            const verifyResponse = await fetch(
+              "/api/razorpay/verify-payment",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  razorpay_order_id: response.razorpay_order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature: response.razorpay_signature,
+                }),
+              }
+            );
+
+            const verifyData = await verifyResponse.json();
+
+            if (!verifyResponse.ok) {
+              throw new Error(verifyData.error || "Payment verification failed");
+            }
+
+            // Step 4: Create order in database
+            const createOrderResponse = await fetch("/api/orders", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                shoeId: shoe._id,
+                paymentId: response.razorpay_payment_id,
+                shippingAddress,
+              }),
+            });
+
+            const createOrderData = await createOrderResponse.json();
+
+            if (!createOrderResponse.ok) {
+              throw new Error(
+                createOrderData.error || "Failed to create order"
+              );
+            }
+
+            // Success!
+            alert("Payment successful! Your order has been placed.");
+            setShowShippingDialog(false);
+            router.push("/customer/orders");
+          } catch (error: any) {
+            console.error("Payment handler error:", error);
+            alert(error.message || "Payment verification failed. Please contact support.");
+          } finally {
+            setPaymentLoading(false);
+          }
+        },
+        prefill: {
+          name: user?.name || "",
+          email: user?.email || "",
+          contact: shippingAddress.phone,
+        },
+        theme: {
+          color: "#3399cc",
+        },
+        modal: {
+          ondismiss: function () {
+            setPaymentLoading(false);
+            setShowShippingDialog(false);
+          },
+        },
+      };
+
+      const razorpay = new window.Razorpay(options);
+      razorpay.open();
+    } catch (error: any) {
+      console.error("Buy now error:", error);
+      alert(error.message || "Failed to initiate payment. Please try again.");
+      setPaymentLoading(false);
+    }
   };
 
   if (loading) {
@@ -97,10 +308,13 @@ export default function ShoeDetailsPage() {
             <Link href="/browse">
               <Button variant="ghost">Browse</Button>
             </Link>
-            {isAuthenticated ? (
-              <Link href={user?.role === "seller" ? "/seller" : "/admin"}>
-                <Button variant="outline">Dashboard</Button>
+            {isAuthenticated && (
+              <Link href="/cart">
+                <Button variant="ghost">Cart ({itemCount})</Button>
               </Link>
+            )}
+            {isAuthenticated ? (
+              <UserMenu />
             ) : (
               <>
                 <Link href="/login">
@@ -228,11 +442,26 @@ export default function ShoeDetailsPage() {
             <div className="flex gap-4">
               {shoe.status === "approved" ? (
                 <>
-                  <Button size="lg" className="flex-1" onClick={handleBuyNow}>
+                  <Button
+                    size="lg"
+                    className="flex-1"
+                    onClick={handleBuyNow}
+                    disabled={addingToCart}
+                  >
                     Buy Now
                   </Button>
-                  <Button size="lg" variant="outline" className="flex-1">
-                    Add to Cart
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={handleAddToCart}
+                    disabled={addingToCart}
+                  >
+                    {addingToCart
+                      ? "Adding..."
+                      : isInCart(shoe._id)
+                      ? "View Cart"
+                      : "Add to Cart"}
                   </Button>
                 </>
               ) : (
@@ -244,6 +473,14 @@ export default function ShoeDetailsPage() {
           </div>
         </div>
       </div>
+
+      {/* Shipping Address Dialog */}
+      <ShippingAddressDialog
+        open={showShippingDialog}
+        onClose={() => setShowShippingDialog(false)}
+        onSubmit={handleShippingSubmit}
+        loading={paymentLoading}
+      />
     </div>
   );
 }

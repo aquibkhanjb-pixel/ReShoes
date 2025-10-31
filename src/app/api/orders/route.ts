@@ -89,7 +89,7 @@ async function createOrder(req: AuthenticatedRequest) {
       return NextResponse.json({ error: "Shoe not found" }, { status: 404 });
     }
 
-    if (shoe.status !== "available") {
+    if (shoe.status !== "approved") {
       return NextResponse.json(
         { error: "Shoe is not available" },
         { status: 400 }

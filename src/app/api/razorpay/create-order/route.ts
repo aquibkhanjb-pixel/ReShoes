@@ -20,7 +20,7 @@ async function handler(req: AuthenticatedRequest) {
       return NextResponse.json({ error: "Shoe not found" }, { status: 404 });
     }
 
-    if (shoe.status !== "available") {
+    if (shoe.status !== "approved") {
       return NextResponse.json(
         { error: "Shoe is not available" },
         { status: 400 }
@@ -41,7 +41,7 @@ async function handler(req: AuthenticatedRequest) {
       currency: "INR",
       receipt: `shoe_${shoe._id}`,
       notes: {
-        shoeId: shoe._id.toString(),
+        shoeId: String(shoe._id),
         userId: req.user!.userId,
         shoeTitle: shoe.title,
       },

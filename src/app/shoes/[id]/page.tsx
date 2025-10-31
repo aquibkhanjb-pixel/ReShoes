@@ -226,7 +226,7 @@ export default function ShoeDetailsPage() {
             )}
 
             <div className="flex gap-4">
-              {shoe.status === "available" ? (
+              {shoe.status === "approved" ? (
                 <>
                   <Button size="lg" className="flex-1" onClick={handleBuyNow}>
                     Buy Now
